@@ -1,0 +1,4 @@
+sample,fastq_1,fastq_2,control,is_control,pool
+H3K27me3_rep1,DATA/a_L1_R1.fastq.gz,DATA/a_L1_R2.fastq.gz,IgG_rep1,false,pool1
+H3K27me3_rep1,DATA/a_L2_R1.fastq.gz,DATA/a_L2_R2.fastq.gz,IgG_rep1,false,pool2
+IgG_rep1,DATA/c_R1.fastq.gz,DATA/c_R2.fastq.gz,,true,pool1

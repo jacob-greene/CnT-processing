@@ -1,0 +1,2 @@
+sample,fastq_1,fastq_2,control,is_control,pool
+H3K27me3_rep1,DATA/a_L1_R1.fastq.gz,DATA/does_not_exist_R2.fastq.gz,,false,pool1

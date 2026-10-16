@@ -1,0 +1,2 @@
+sample,fastq_1,fastq_2,control,is_control,pool
+IgG_rep1,DATA/c_R1.fastq.gz,DATA/c_R2.fastq.gz,,yes,pool1

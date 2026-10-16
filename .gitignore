@@ -1,0 +1,22 @@
+# Nextflow run artefacts
+work/
+results/
+.nextflow/
+.nextflow.log*
+timeline*.html
+report*.html
+trace*.txt
+dag*.html
+dag*.dot
+
+# Test data that is too large for git (rebuilt by tests/make_test_data.sh)
+tests/data/genome/*.fa
+tests/data/genome/*.fa.gz
+tests/data/genome/*.fai
+tests/data/bowtie2/
+test_data_work/
+
+# Editors and OS
+.DS_Store
+*.swp
+.ipynb_checkpoints/

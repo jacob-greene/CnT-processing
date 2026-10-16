@@ -1,0 +1,11 @@
+# Ensembl/FlyBase BDGP6 chromosome name -> UCSC dm6 name.
+# From the UCSC dm6.chromAlias.txt table; chrM (GenBank KJ947872.2) has no
+# Ensembl alias there and is added by hand. Contigs not listed are dropped.
+2L	chr2L
+2R	chr2R
+3L	chr3L
+3R	chr3R
+4	chr4
+X	chrX
+Y	chrY
+mitochondrion_genome	chrM
