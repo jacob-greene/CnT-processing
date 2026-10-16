@@ -1,0 +1,64 @@
+# Runs the test profile with Docker on every push and pull request:
+# once with blacklist_filter = false (the default) and once with true.
+# Each run is followed by the known-answer checks in tests/check_outputs.py.
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  validator:
+    name: Sample sheet validator
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: nf-core/setup-nextflow@v2
+        with:
+          version: '24.10.2'
+      - run: bash tests/test_samplesheet.sh
+
+  test:
+    name: test,docker (blacklist_filter = ${{ matrix.blacklist_filter }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        blacklist_filter: [false, true]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: nf-core/setup-nextflow@v2
+        with:
+          version: '24.10.2'
+      - name: Run the pipeline
+        run: |
+          nextflow run ${GITHUB_WORKSPACE} -profile test,docker \
+              --blacklist_filter ${{ matrix.blacklist_filter }} --outdir results
+      - name: Known-answer checks
+        run: |
+          docker run --rm -u "$(id -u):$(id -g)" -v "$PWD:$PWD" -w "$PWD" \
+              quay.io/biocontainers/deeptools:3.5.6--pyhdfd78af_0 \
+              python3 tests/check_outputs.py results --test-data
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: results-blacklist-${{ matrix.blacklist_filter }}
+          path: |
+            results/*.tsv
+            results/genome/
+            results/fragment_sizes/
+            results/pipeline_info/
+            .nextflow.log
+          if-no-files-found: warn
