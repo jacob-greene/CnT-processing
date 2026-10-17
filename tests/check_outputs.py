@@ -12,6 +12,11 @@ Checks:
     carry no fragments, so this is the mean over the non-blacklisted genome)
   * read-count scaled bigWigs: mean_i = C_i / mean_j(C_j), pool mean of these = 1,
     and mean_i / mean_k = C_i / C_k for every pair of samples in a pool
+  * per-base signal: on a fixed random sample of windows, every bigWig base =
+    (fragment pileup rebuilt from the fragment BED) x its scale factor. This
+    catches errors that keep the total, e.g. values moved between intervals.
+    Negative control (first sample): the same check must fail on a copy of
+    each bigWig with values shuffled among equal-length intervals
   * s_cov and s_rc recomputed from the fragment BED files, independent of the pipeline
   * alignment_stats.tsv: every column filled, % chrM > 0 (test data),
     filtered <= aligned <= after trimming <= total
@@ -27,10 +32,16 @@ import csv
 import gzip
 import os
 import sys
+import tempfile
 
+import numpy as np
 import pyBigWig
 
+from mutate_bigwig import shuffle
+
 TOL = 1e-3
+WINDOW = 5000           # bp per per-base check window
+N_WINDOWS = (60, 20)    # windows centred on random fragments, windows anywhere
 failures = 0
 
 
@@ -66,6 +77,73 @@ def fragments(path):
         for line in fh:
             c, s, e = line.split('\t')[:3]
             yield c, int(s), int(e)
+
+
+def check_windows(frags, sizes, seed=1):
+    """Fixed random windows: most centred on fragments (signal), some anywhere (mostly zero)."""
+    rng = np.random.default_rng(seed)
+    wins = []
+    for i in rng.choice(len(frags), size=min(N_WINDOWS[0], len(frags)), replace=False):
+        c, b, e = frags[i]
+        mid = (b + e) // 2
+        wins.append((c, max(0, mid - WINDOW // 2), min(sizes[c], mid + WINDOW // 2)))
+    chroms = sorted(sizes)
+    weights = np.array([sizes[c] for c in chroms], float)
+    for c in rng.choice(chroms, size=N_WINDOWS[1], p=weights / weights.sum()):
+        b = int(rng.integers(0, max(1, sizes[c] - WINDOW)))
+        wins.append((c, b, min(sizes[c], b + WINDOW)))
+    return wins
+
+
+def pileup(frags_by_chrom, starts_by_chrom, c, b, e):
+    """Per-base fragment count on [b, e), rebuilt from the fragments (all < 1000 bp)."""
+    cov = np.zeros(e - b + 1)
+    fr, st = frags_by_chrom.get(c, []), starts_by_chrom.get(c, [])
+    for fb, fe in fr[bisect.bisect_left(st, b - 1000):bisect.bisect_left(st, e)]:
+        lo, hi = max(fb, b), min(fe, e)
+        if lo < hi:
+            cov[lo - b] += 1
+            cov[hi - b] -= 1
+    return np.cumsum(cov)[:-1]
+
+
+def per_base_check(sample, frags, sizes, bigwigs, negative_control=False):
+    """bigwigs: list of (kind, path, scale factor). One PASS/FAIL per bigWig."""
+    by_chrom = {}
+    for c, b, e in frags:
+        by_chrom.setdefault(c, []).append((b, e))
+    starts = {c: [b for b, _ in v] for c, v in by_chrom.items()}
+    wins = check_windows(frags, sizes)
+
+    def errors(path, factor):
+        bw = pyBigWig.open(path)
+        bad, nonzero, worst = 0, 0, 0.0
+        for c, b, e in wins:
+            want = pileup(by_chrom, starts, c, b, e) * factor
+            got = np.nan_to_num(np.array(bw.values(c, b, e), dtype=float))
+            err = np.abs(got - want) / np.maximum(want, 1e-9)
+            err[want == 0] = np.abs(got[want == 0])
+            bad += int((err > 1e-4).sum())
+            worst = max(worst, float(err.max()))
+            nonzero += int((want > 0).sum())
+        bw.close()
+        return bad, nonzero, worst
+
+    for kind, path, factor in bigwigs:
+        bad, nonzero, worst = errors(path, factor)
+        check(bad == 0 and nonzero > 0, f'{sample}: {kind} per-base = fragment pileup x factor',
+              f'{len(wins)} windows, {nonzero:,} covered bp, {bad} bp off, max rel err {worst:.1e}')
+        if negative_control:
+            # The same check on a copy with values shuffled among equal-length
+            # intervals (total unchanged) must fail, or it cannot catch such errors.
+            with tempfile.TemporaryDirectory() as tmp:
+                mutated = os.path.join(tmp, 'mutated.bw')
+                moved = shuffle(path, mutated)
+                bad_m = errors(mutated, factor)[0]
+                d_total = abs(total_signal(mutated) - total_signal(path)) / total_signal(path)
+            check(moved > 0 and bad_m > 0 and d_total < 1e-6,
+                  f'{sample}: negative control - per-base check fails on shuffled {kind} bigWig',
+                  f'{moved:,} values moved, {bad_m:,} bp off, total changed by {d_total:.1e}')
 
 
 def main():
@@ -109,8 +187,23 @@ def main():
         m = total_signal(f'{out}/bigwig/coverage_norm/{s}.coverage_norm.bw') / genome_size
         check(abs(m - 1) < TOL, f'{s}: coverage_norm weighted mean = 1', f'{m:.6f}')
 
-    # ---- Read-count scaled bigWigs ----
+    # ---- Per-base signal on a sample of windows ----
+    print()
+    sizes = {}
+    with open(f'{out}/genome/canonical.chrom.sizes') as fh:
+        for line in fh:
+            c, n = line.split('\t')[:2]
+            sizes[c] = int(n)
     rc_dir = f'{out}/bigwig/readcount_scaled'
+    for r in sf:
+        s = r['sample']
+        bigwigs = [('coverage_norm', f'{out}/bigwig/coverage_norm/{s}.coverage_norm.bw', float(r['s_cov']))]
+        if os.path.isdir(rc_dir):
+            bigwigs.append(('readcount_scaled', f'{rc_dir}/{s}.readcount_scaled.bw', float(r['s_rc'])))
+        per_base_check(s, list(fragments(f'{out}/fragments/{s}.fragments.bed.gz')), sizes, bigwigs,
+                       negative_control=(r is sf[0]))
+
+    # ---- Read-count scaled bigWigs ----
     if os.path.isdir(rc_dir):
         print()
         means = {}
