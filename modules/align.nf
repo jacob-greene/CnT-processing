@@ -24,7 +24,9 @@ process BOWTIE2_ALIGN {
 
     script:
     """
+    # A read group on every read: Picard 3.x MarkDuplicates fails without one.
     bowtie2 ${bt2CutTag()} -p ${task.cpus} -x ${index_dir}/${index_name} \\
+            --rg-id ${meta.id} --rg SM:${meta.id} \\
             -1 ${r1} -2 ${r2} 2> ${meta.id}.bowtie2.log \\
         | samtools view -b -o ${meta.id}.bam -
     cat ${meta.id}.bowtie2.log
