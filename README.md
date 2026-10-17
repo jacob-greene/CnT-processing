@@ -104,6 +104,11 @@ bigWig averages 1 over the genome, the read-count scaled bigWigs keep the
 coverage ratios between samples, the scale factors match a recomputation from
 the fragment files, and the alignment table columns reconcile.
 
+Without `--ecoli_index`, each run downloads the E. coli FASTA from ENA
+(`--ecoli_fasta`). If that download fails (`Can't stage file ...`), run the
+same command again with `-resume`. To skip the download, pass a local FASTA
+with `--ecoli_fasta` or a prebuilt Bowtie2 index with `--ecoli_index`.
+
 ## Check a sample sheet
 
 ```bash

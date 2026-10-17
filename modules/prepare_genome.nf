@@ -54,7 +54,10 @@ process BOWTIE2_BUILD {
     script:
     """
     mkdir bowtie2_${name}
-    zcat -f fasta/* > ${name}.fa
+    # Plain or gzipped FASTA. BusyBox zcat (in the containers) rejects plain text, even with -f.
+    for f in fasta/*; do
+        if gzip -t "\$f" 2> /dev/null; then gzip -cd "\$f"; else cat "\$f"; fi
+    done > ${name}.fa
     bowtie2-build --threads ${task.cpus} -q ${name}.fa bowtie2_${name}/${name}
     rm ${name}.fa
 
