@@ -62,12 +62,19 @@ features counts for each of them (`-O`). This makes the counts use exactly the
 same fragments as the bigWigs and FRiP. The spec asked for paired-end
 counting of the BAM; counting the fragments instead is a deliberate change.
 
-**Sample correlation counts an empty bin as 0.** A 5 kb bin with no fragments
-has no bigWig value. deepTools would drop every bin that is empty in any
-sample, which keeps only bins covered in all samples (for a sparse IgG, mostly
-chrM). So an empty bin is set to 0, and bins that are 0 in every sample are
+**Sample correlation uses true 5 kb bin means.** The raw bedGraphs are written
+with `bedtools genomecov -bga`, so bases without fragments are explicit 0
+intervals in the bigWigs. A deepTools bin value is then the mean over all bases
+of the bin. (With `-bg`, deepTools would average over the covered bases only,
+which inflates sparse bins several-fold.) Bins that are 0 in every sample are
 skipped (`--skipZeros`). The log1p is applied to the bin values before
 `plotCorrelation`, because its `--log1p` option changes only scatter plots.
+
+`--skipZeros` keeps only bins with fragments in at least one sample. With
+shallow data, most kept bins then have fragments in one sample only, and the
+correlations between samples are negative. On the 1M-pair smoke test, every
+pair of samples has r < 0. The correlation reflects real co-occupancy only at
+higher depth.
 
 ## Input data
 
@@ -423,7 +430,8 @@ per sample) to `test_data_work/smoke/`. `examples/params.json` and
   feature, counted again from the fragment and SAF files
 - FRiP, control FRiP, peak counts and widths, recomputed from the fragment and
   peak files
-- the correlation matrix, recomputed from the bin values
+- the 5 kb bin means, rebuilt from the fragment files, equal the pipeline's bin
+  file and the bigWigs; the correlation matrix is recomputed from these bins
 
 GitHub Actions runs the test profile twice on every push, with
 `blacklist_filter = false` and `true`, then the checks.

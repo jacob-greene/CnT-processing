@@ -35,8 +35,9 @@ Checks:
     every target with a control; control_frip < FRiP (test data)
   * deepTools: the peak and TSS plots exist; the TSS matrix has one row per
     protein-coding gene
-  * correlation: the matrix = Pearson of log1p(bin values), recomputed (empty
-    bins = 0; bins that are 0 in every sample skipped)
+  * correlation: the 5 kb bin means rebuilt from the fragment BEDs x s_cov equal
+    the pipeline's bin file and the bigWigs; the matrix = Pearson of log1p of these
+    bins (bins that are 0 in every sample skipped)
   * MultiQC: the report exists and holds every expected section
 """
 import argparse
@@ -182,6 +183,21 @@ def per_feature_counts(fr, feats):
             st, en = fr[c]
             out[i] = np.searchsorted(st, E, 'left') - np.searchsorted(en, S, 'right')
     return out
+
+
+def bin_sums(starts, ends, values, width, n_bins):
+    """Sum of value x overlap bp per bin [k*width, (k+1)*width) for intervals [start, end)."""
+    k0, k1 = starts // width, (ends - 1) // width
+    out = np.zeros(n_bins + 1)
+    one = k0 == k1
+    np.add.at(out, k0[one], values[one] * (ends[one] - starts[one]))
+    m = ~one
+    np.add.at(out, k0[m], values[m] * ((k0[m] + 1) * width - starts[m]))
+    np.add.at(out, k1[m], values[m] * (ends[m] - k1[m] * width))
+    full = np.zeros(n_bins + 2)                      # bins strictly between k0 and k1
+    np.add.at(full, k0[m] + 1, values[m])
+    np.add.at(full, k1[m], -values[m])
+    return (out + np.cumsum(full)[:n_bins + 1] * width)[:n_bins]
 
 
 def merge(intervals):
@@ -358,12 +374,45 @@ def downstream_checks(out, sf, sizes, test_data):
           'TSS matrix: one row per protein-coding gene, every sample a column', f'{rows:,} rows vs {n_tss:,} genes')
 
     # ---- Correlation ----
+    # The bin values are recomputed from the fragment BEDs (true 5 kb means x s_cov) and
+    # compared with the pipeline's bin file and with the bigWigs, so a wrong bigWig or a
+    # wrong bin file both turn this red. The matrix is then recomputed from these bins.
     print()
     with gzip.open(f'{out}/correlation/correlation_bins.tsv.gz', 'rt') as fh:
         labels = [x.strip("'") for x in next(fh).rstrip('\n').split('\t')[3:]]
-        vals = np.array([[float(x) for x in line.rstrip('\n').split('\t')[3:]] for line in fh])
-    vals = np.nan_to_num(vals)                   # no bigWig value = no fragments = 0
-    vals = vals[(vals != 0).any(axis=1)]         # --skipZeros: drop bins that are 0 in every sample
+        rows = [line.rstrip('\n').split('\t') for line in fh]
+    chroms = np.array([r[0] for r in rows])
+    b_start = np.array([int(r[1]) for r in rows])
+    b_end = np.array([int(r[2]) for r in rows])
+    pipe = np.nan_to_num(np.array([[float(x) for x in r[3:]] for r in rows]))   # NaN = no data = 0
+    width = int(np.max(b_end - b_start))
+    factor = {r['sample']: float(r['s_cov']) for r in sf}
+    want_bins = np.zeros_like(pipe)
+    bw_bins = np.zeros_like(pipe)
+    for j, s in enumerate(labels):
+        fr = frag_arrays(f'{out}/fragments/{s}.fragments.bed.gz')
+        bw = pyBigWig.open(f'{out}/bigwig/coverage_norm/{s}.coverage_norm.bw')
+        for c in np.unique(chroms):
+            idx = np.flatnonzero(chroms == c)
+            k, n_bins = b_start[idx] // width, int(b_start[idx].max() // width) + 1
+            if c in fr:
+                st, en = fr[c]
+                want_bins[idx, j] = bin_sums(st, en, np.ones(len(st)), width, n_bins)[k]
+            iv = bw.intervals(c) or []
+            if iv:
+                a = np.array(iv, dtype=float)
+                bw_bins[idx, j] = bin_sums(a[:, 0].astype(np.int64), a[:, 1].astype(np.int64), a[:, 2],
+                                           width, n_bins)[k]
+        bw.close()
+        length = (b_end - b_start).astype(float)
+        want_bins[:, j] *= factor[s] / length
+        bw_bins[:, j] /= length
+    for j, s in enumerate(labels):
+        for name, got_bins in (('pipeline bin file', pipe), ('bigWig', bw_bins)):
+            err = np.abs(got_bins[:, j] - want_bins[:, j]) / np.maximum(want_bins[:, j], 1)
+            check(err.max() < 1e-4, f'{s}: 5 kb bin means from the {name} = fragment BED x s_cov',
+                  f'{len(err):,} bins, max error {err.max():.1e}')
+    vals = want_bins[(want_bins != 0).any(axis=1)]   # --skipZeros: drop bins that are 0 in every sample
     want = np.corrcoef(np.log1p(vals).T)
     got = {}
     with open(f'{out}/correlation/correlation_matrix.tsv') as fh:
@@ -373,7 +422,8 @@ def downstream_checks(out, sf, sizes, test_data):
         for c, v in zip(cols, f[1:]):
             got[(f[0].strip("'"), c)] = float(v)
     err = max(abs(got[(a, b)] - want[i, j]) for i, a in enumerate(labels) for j, b in enumerate(labels))
-    check(sorted(labels) == sorted(samples) and err < 1e-4, 'correlation matrix = Pearson of log1p(5 kb bin values)',
+    check(sorted(labels) == sorted(samples) and err < 1e-4,
+          'correlation matrix = Pearson of log1p(5 kb bin means), bins rebuilt from the fragment BEDs',
           f'{len(vals):,} bins, max error {err:.1e}')
     for i, a in enumerate(labels):
         best = max((want[i, j], b) for j, b in enumerate(labels) if j != i)

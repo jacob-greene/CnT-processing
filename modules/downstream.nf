@@ -268,10 +268,10 @@ process DEEPTOOLS_TSS {
  * bigWigs, then plotCorrelation: Pearson on log1p values, hierarchically clustered heatmap.
  * Controls included.
  *
- * A bin without fragments has no bigWig value (NaN). plotCorrelation would drop every bin
- * that is NaN in ANY sample, which keeps only bins covered in every sample (with a sparse
- * IgG, mostly chrM). So NaN is set to 0 (no fragments = zero coverage), and bins that are
- * 0 in every sample are skipped (--skipZeros).
+ * The bigWigs come from -bga bedGraphs, so every base has a value and a bin value is the
+ * mean over the whole bin. Any remaining NaN (no data) is set to 0, because plotCorrelation
+ * would drop every bin that is NaN in ANY sample. Bins that are 0 in every sample are
+ * skipped (--skipZeros).
  *
  * plotCorrelation --log1p changes only the scatter plot axes, not the correlation. So the
  * log1p is applied to the bin matrix here, before plotCorrelation reads it.

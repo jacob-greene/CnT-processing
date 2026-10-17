@@ -27,6 +27,9 @@
  * Fragment = leftmost mate start to rightmost mate end.
  * With blacklist_filter = true, fragments overlapping the blacklist are removed.
  * Also writes the raw (unnormalized) fragment-pileup bedGraph that SEACR needs.
+ * It is written with -bga, so bases without fragments are explicit 0 intervals. Then a
+ * deepTools bin mean (multiBigwigSummary, computeMatrix) is the mean over every base of
+ * the bin, not only over its covered bases. SEACR skips 0 intervals.
  */
 process FRAGMENTS {
     tag "${meta.id}${suffix}"
@@ -61,7 +64,7 @@ process FRAGMENTS {
 
     ${filter ? "bedtools intersect -v -a all.bed -b ${blacklist} > ${out}.fragments.bed" : "mv all.bed ${out}.fragments.bed"}
 
-    bedtools genomecov -bg -i ${out}.fragments.bed -g ${chrom_sizes} > ${out}.raw.bedGraph
+    bedtools genomecov -bga -i ${out}.fragments.bed -g ${chrom_sizes} > ${out}.raw.bedGraph
 
     before=\$( [ -f all.bed ] && wc -l < all.bed || wc -l < ${out}.fragments.bed )
     after=\$(wc -l < ${out}.fragments.bed)
