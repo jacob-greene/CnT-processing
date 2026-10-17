@@ -108,6 +108,9 @@ Without `--ecoli_index`, each run builds the E. coli Bowtie2 index from
 `assets/U00096.3.fa.gz` (ENA U00096.3, shipped with the pipeline). To skip the
 build, pass a prebuilt Bowtie2 index with `--ecoli_index`.
 
+The test run downloads nothing. Every test input is in `tests/data/`, including
+the chr22 + chrM FASTA (UCSC hg38) that the test Bowtie2 index is built from.
+
 ## Check a sample sheet
 
 ```bash

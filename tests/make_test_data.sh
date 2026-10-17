@@ -25,7 +25,7 @@
 #            genome/chr22_chrM.gencode.v50.gtf.gz
 #            genome/chr22_chrM.ccre.bed.gz
 #            genome/chr22_chrM.blacklist.v2.bed.gz
-#            genome/chr22_chrM.fa.gz          (git-ignored)
+#            genome/chr22_chrM.fa.gz          (UCSC chr22 + chrM, gzip -n -9)
 #            bowtie2/chr22_chrM.*.bt2         (git-ignored)
 #            MANIFEST.tsv                     (sources, checksums, read counts)
 #
@@ -140,7 +140,12 @@ for c in $CONTIGS; do
 done
 
 G="$OUT/genome/chr22_chrM"
-zcat $(for c in $CONTIGS; do echo "$WORK/ref/$c.fa.gz"; done) | gzip -c > "$G.fa.gz"
+fetch "$UCSC/chromosomes/md5sum.txt" "$WORK/ref/chromosomes.md5sum.txt"
+for c in $CONTIGS; do
+    grep " $c.fa.gz\$" "$WORK/ref/chromosomes.md5sum.txt" | sed "s|$c.fa.gz|$WORK/ref/$c.fa.gz|" | md5sum -c --quiet -
+done
+# -n: no file name or time stamp, so a rebuild gives the same bytes.
+zcat $(for c in $CONTIGS; do echo "$WORK/ref/$c.fa.gz"; done) | gzip -n -9 -c > "$G.fa.gz"
 awk -v keep="$CONTIGS" 'BEGIN { n = split(keep, k, " "); for (i = 1; i <= n; i++) want[k[i]] = 1 }
                         ($1 in want)' "$WORK/ref/hg38.chrom.sizes" | sort -k1,1 > "$G.chrom.sizes"
 # Keep the GTF header lines and every feature on the test contigs.
