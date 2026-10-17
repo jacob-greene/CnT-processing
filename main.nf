@@ -4,10 +4,10 @@
  * CUT&Tag paired-end FASTQ -> coverage-normalized bigWigs, featureCounts matrices,
  * SEACR peaks, QC tables and a MultiQC report.
  *
- * Status: Phase 2. Implemented: sample sheet validation, genome preparation and
- * processing steps 1-10 (FastQC, trimming, alignment, E. coli QC, filtering,
- * duplicate marking, alignment stats, fragment sizes, fragments, bigWigs).
- * Steps 11-16 follow in Phase 3.
+ * Steps: 1 lanes + FastQC, 2 trimming, 3 alignment, 4 E. coli QC, 5 filtering,
+ * 6 duplicate marking, 7 alignment stats, 8 fragment sizes, 9 fragments,
+ * 10 bigWigs, 11 featureCounts, 12 SEACR, 13 peak stats + FRiP, 14 deepTools,
+ * 15 sample correlation, 16 MultiQC.
  */
 
 nextflow.enable.dsl = 2
@@ -22,7 +22,8 @@ include { FRAGMENTS; SCALE_FACTORS               } from './modules/coverage.nf'
 include { FRAGMENTS as FRAGMENTS_DEDUP           } from './modules/coverage.nf'
 include { BIGWIG as BIGWIG_COV                   } from './modules/coverage.nf'
 include { BIGWIG as BIGWIG_RC                    } from './modules/coverage.nf'
-include { QC_TABLES; FRAGMENT_SIZE_PLOT; SOFTWARE_VERSIONS } from './modules/qc.nf'
+include { QC_TABLES; FRAGMENT_SIZE_PLOT; SOFTWARE_VERSIONS; MULTIQC } from './modules/qc.nf'
+include { ANNOTATIONS; FEATURECOUNTS; SEACR; PEAK_STATS; DEEPTOOLS_PEAKS; DEEPTOOLS_TSS; CORRELATION } from './modules/downstream.nf'
 
 def SUPPORTED_GENOMES = ['hg38', 'hg19', 'mm10', 'dm6']
 
@@ -191,12 +192,90 @@ workflow {
     QC_TABLES(Channel.value(samples.collect { it.meta.id }), ch_qc_files)
     FRAGMENT_SIZE_PLOT(FILTER_BAM.out.fragment_sizes.map { meta, f -> f }.collect())
 
+    // ---- Step 11: featureCounts over genes, promoters and cCREs ----
+    def ids   = samples.collect { it.meta.id }      // sample sheet order
+    def order = ids.withIndex().collectEntries { id, i -> [(id): i] }
+    def byOrder = { a, b -> order[a[0].id] <=> order[b[0].id] }
+
+    ANNOTATIONS(PREPARE_GTF.out.gtf, ch_chrom_sizes, genome.ccre_bed ? file(genome.ccre_bed) : no_file)
+    ch_saf = ANNOTATIONS.out.saf.flatten().map { f -> [f.baseName, f] }
+    FEATURECOUNTS(ch_saf, ids, FRAGMENTS.out.bed.map { meta, bed -> bed }.collect(), ch_chrom_sizes)
+
+    // ---- Step 12: SEACR, targets only, each with its own control (if any) ----
+    ch_control_bg = (params.dedup_controls ? FRAGMENTS_DEDUP.out.bedgraph : FRAGMENTS.out.bedgraph)
+        .filter { meta, bg -> meta.is_control }
+        .map { meta, bg -> [meta.id, bg] }
+    ch_targets_bg = FRAGMENTS.out.bedgraph.filter { meta, bg -> !meta.is_control }
+    ch_seacr_in = ch_targets_bg
+        .filter { meta, bg -> meta.control }
+        .map { meta, bg -> [meta.control, meta, bg] }
+        .combine(ch_control_bg, by: 0)
+        .map { cid, meta, bg, cbg -> [meta, bg, cbg] }
+        .mix(ch_targets_bg.filter { meta, bg -> !meta.control }.map { meta, bg -> [meta, bg, no_file] })
+    SEACR(ch_seacr_in)
+    if (!samples.any { it.meta.is_control }) {
+        log.info "No sample has is_control = true: SEACR runs in numeric-threshold mode (top 1% of signal) only."
+    }
+
+    // ---- Step 13: peak stats + FRiP -> peaks_frip.tsv ----
+    ch_frag_by_id = FRAGMENTS.out.bed.map { meta, bed -> [meta.id, bed] }
+    ch_peaks_frag = SEACR.out.peaks
+        .map { meta, peaks, top, mode -> [meta.id, meta, peaks, top, mode] }
+        .join(ch_frag_by_id)
+        .map { id, meta, peaks, top, mode, bed -> [meta.control ?: '', meta, peaks, top, mode, bed] }
+    PEAK_STATS(
+        ch_peaks_frag.filter { it[0] }
+            .combine(ch_frag_by_id, by: 0)
+            .map { cid, meta, peaks, top, mode, bed, cbed -> [meta, peaks, top, mode, bed, cbed] }
+            .mix(ch_peaks_frag.filter { !it[0] }
+                .map { cid, meta, peaks, top, mode, bed -> [meta, peaks, top, mode, bed, no_file] })
+    )
+    ch_peaks_frip = PEAK_STATS.out.tsv
+        .collectFile(name: 'peaks_frip.tsv', keepHeader: true, skip: 1, sort: { f -> order[f.name - '.peaks_frip.tsv'] },
+                     storeDir: params.outdir)
+
+    // ---- Step 14: deepTools signal at peaks (per target) and at TSSs (all samples) ----
+    ch_cov_bw = BIGWIG_COV.out.bigwig.map { meta, bw -> [meta.id, bw] }
+    ch_peaks_bw = SEACR.out.peaks
+        .map { meta, peaks, top, mode -> [meta.id, meta, peaks] }
+        .join(ch_cov_bw)
+        .map { id, meta, peaks, bw -> [meta.control ?: '', meta, peaks, bw] }
+    DEEPTOOLS_PEAKS(
+        ch_peaks_bw.filter { it[0] }
+            .combine(ch_cov_bw, by: 0)
+            .map { cid, meta, peaks, bw, cbw -> [meta, peaks, bw, cbw] }
+            .mix(ch_peaks_bw.filter { !it[0] }.map { cid, meta, peaks, bw -> [meta, peaks, bw, no_file] })
+    )
+    ch_cov_bws = BIGWIG_COV.out.bigwig.toSortedList(byOrder).map { l -> l.collect { it[1] } }
+    ch_rc_bws  = params.readcount_scaled_bw
+        ? BIGWIG_RC.out.bigwig.toSortedList(byOrder).map { l -> l.collect { it[1] } }
+        : Channel.value([])
+    DEEPTOOLS_TSS(ids, ch_cov_bws, ch_rc_bws, ANNOTATIONS.out.tss_bed)
+
+    // ---- Step 15: sample correlation ----
+    CORRELATION(ids, ch_cov_bws)
+
+    // ---- Step 16: MultiQC ----
+    ch_mqc_inputs = FASTQC.out.reports.flatten().filter { it.name.endsWith('.zip') }
+        .mix(TRIM_GALORE.out.reports.flatten(),
+             BOWTIE2_ALIGN.out.log.map { meta, f -> f },
+             BOWTIE2_ECOLI.out.log.map { meta, f -> f },
+             FILTER_BAM.out.flagstat.map { meta, f -> f },
+             MARKDUPLICATES.out.metrics.map { meta, f, illumina -> f },
+             FEATURECOUNTS.out.summary)
+        .collect()
+    ch_mqc_tables = QC_TABLES.out.alignment_stats
+        .mix(QC_TABLES.out.duplication, SCALE_FACTORS.out.tsv, ch_peaks_frip,
+             CORRELATION.out.plots.flatten().filter { it.name.endsWith('.png') })
+        .collect()
+    MULTIQC(file("${projectDir}/assets/multiqc_config.yml"), ch_mqc_inputs, ch_mqc_tables,
+            FILTER_BAM.out.fragment_sizes.map { meta, f -> f }.collect())
+
     // ---- software_versions.yml ----
     ch_versions = ch_versions.mix(
         GENOME_SIZE.out.versions, FASTQC.out.versions, TRIM_GALORE.out.versions,
         BOWTIE2_ALIGN.out.versions, FILTER_BAM.out.versions, MARKDUPLICATES.out.versions,
-        FRAGMENTS.out.versions, BIGWIG_COV.out.versions)
+        FRAGMENTS.out.versions, BIGWIG_COV.out.versions, FEATURECOUNTS.out.versions,
+        SEACR.out.versions, DEEPTOOLS_TSS.out.versions, CORRELATION.out.versions, MULTIQC.out.versions)
     SOFTWARE_VERSIONS(ch_versions.collect())
-
-    // Steps 11-16 (featureCounts, SEACR, FRiP, deepTools, correlation, MultiQC) follow in Phase 3.
 }

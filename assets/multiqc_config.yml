@@ -1,0 +1,52 @@
+# MultiQC settings for CnT-processing.
+# The target and E. coli Bowtie2 logs, and the three featureCounts feature sets,
+# each get their own section.
+report_comment: >
+  CUT&Tag processing report. Pipeline tables: alignment stats, duplication,
+  scale factors, peaks and FRiP. See the pipeline README for every column.
+
+extra_fn_clean_exts:
+  - '.bowtie2.log'
+  - '.ecoli'
+  - '.filtered'
+  - '.markdup_metrics'
+
+module_order:
+  - fastqc
+  - cutadapt
+  - bowtie2:
+      name: 'Bowtie2 (target genome)'
+      path_filters_exclude:
+        - '*.ecoli.bowtie2.log'
+  - bowtie2:
+      name: 'Bowtie2 (E. coli carry-over)'
+      anchor: 'bowtie2_ecoli'
+      info: 'Read pairs that align to E. coli K-12 MG1655. QC only: no spike-in normalization.'
+      path_filters:
+        - '*.ecoli.bowtie2.log'
+  - samtools
+  - picard
+  - featureCounts:
+      name: 'featureCounts (gene bodies)'
+      anchor: 'featurecounts_genes'
+      path_filters:
+        - '*genes.counts.tsv.summary'
+  - featureCounts:
+      name: 'featureCounts (promoters)'
+      anchor: 'featurecounts_promoters'
+      path_filters:
+        - '*promoters.counts.tsv.summary'
+  - featureCounts:
+      name: 'featureCounts (cCREs)'
+      anchor: 'featurecounts_ccre'
+      path_filters:
+        - '*ccre.counts.tsv.summary'
+
+custom_content:
+  order:
+    - alignment_stats
+    - duplication
+    - scale_factors
+    - peaks_frip
+    - fragment_sizes
+    - correlation_heatmap

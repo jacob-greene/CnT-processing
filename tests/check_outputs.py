@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Known-answer checks on a finished CnT-processing run (steps 1-10).
+"""Known-answer checks on a finished CnT-processing run (steps 1-16).
 
     python3 tests/check_outputs.py <outdir> [--test-data]
 
@@ -26,6 +26,18 @@ Checks:
   * optical duplicates are NA for the SRA-named test reads (--test-data)
   * blacklist_filter = true: 0 fragments overlap the blacklist, and genome_size =
     canonical bp - merged blacklist bp
+  * featureCounts: every matrix value = the number of fragments overlapping that
+    feature, counted independently from the fragment BED and the SAF; Assigned =
+    fragments overlapping >= 1 feature; summary total = fragments; rate > 0;
+    promoter rows = protein-coding genes in the GTF; promoter = TSS +/- window
+  * peaks_frip.tsv: peak count and widths from the SEACR BED; FRiP and
+    control_frip recomputed from the fragment BEDs; SEACR mode = control for
+    every target with a control; control_frip < FRiP (test data)
+  * deepTools: the peak and TSS plots exist; the TSS matrix has one row per
+    protein-coding gene
+  * correlation: the matrix = Pearson of log1p(bin values), recomputed (empty
+    bins = 0; bins that are 0 in every sample skipped)
+  * MultiQC: the report exists and holds every expected section
 """
 import argparse
 import bisect
@@ -145,6 +157,239 @@ def per_base_check(sample, frags, sizes, bigwigs, negative_control=False):
             check(moved > 0 and bad_m > 0 and d_total < 1e-6,
                   f'{sample}: negative control - per-base check fails on shuffled {kind} bigWig',
                   f'{moved:,} values moved, {bad_m:,} bp off, total changed by {d_total:.1e}')
+
+
+# ---------------------------------------------------------------------------
+# Steps 11-16
+# ---------------------------------------------------------------------------
+
+def frag_arrays(path):
+    """Fragments per chromosome as sorted numpy arrays of starts and of ends (0-based, half-open)."""
+    by = {}
+    for c, b, e in fragments(path):
+        by.setdefault(c, ([], []))
+        by[c][0].append(b)
+        by[c][1].append(e)
+    return {c: (np.sort(np.array(b)), np.sort(np.array(e))) for c, (b, e) in by.items()}
+
+
+def per_feature_counts(fr, feats):
+    """feats: list of (chrom, start0, end). Fragments [s, e) overlapping [S, E) by >= 1 bp:
+    s < E and e > S = (#starts < E) - (#ends <= S), as no fragment ends before it starts."""
+    out = np.zeros(len(feats), dtype=np.int64)
+    for i, (c, S, E) in enumerate(feats):
+        if c in fr:
+            st, en = fr[c]
+            out[i] = np.searchsorted(st, E, 'left') - np.searchsorted(en, S, 'right')
+    return out
+
+
+def merge(intervals):
+    """Sorted, merged (start, end) arrays per chromosome."""
+    by = {}
+    for c, b, e in intervals:
+        by.setdefault(c, []).append((b, e))
+    res = {}
+    for c, iv in by.items():
+        iv.sort()
+        ms, me = [], []
+        for b, e in iv:
+            if ms and b <= me[-1]:
+                me[-1] = max(me[-1], e)
+            else:
+                ms.append(b)
+                me.append(e)
+        res[c] = (np.array(ms), np.array(me))
+    return res
+
+
+def n_overlapping(path, merged):
+    """Fragments in a BED overlapping >= 1 merged interval by >= 1 bp, and all fragments."""
+    hit = total = 0
+    by = {}
+    for c, b, e in fragments(path):
+        by.setdefault(c, ([], []))
+        by[c][0].append(b)
+        by[c][1].append(e)
+        total += 1
+    for c, (b, e) in by.items():
+        if c not in merged:
+            continue
+        ms, me = merged[c]
+        b, e = np.array(b), np.array(e)
+        i = np.searchsorted(me, b, 'right')          # first merged interval ending after the fragment start
+        ok = i < len(ms)
+        hit += int((ms[np.minimum(i, len(ms) - 1)] < e)[ok].sum())
+    return hit, total
+
+
+def read_bed(path):
+    rows = []
+    with open(path) as fh:
+        for line in fh:
+            f = line.rstrip('\n').split('\t')
+            if len(f) >= 3:
+                rows.append((f[0], int(f[1]), int(f[2])))
+    return rows
+
+
+def protein_coding_genes(gtf, sizes):
+    n = 0
+    with gzip.open(gtf, 'rt') as fh:
+        for line in fh:
+            f = line.split('\t')
+            if len(f) > 8 and f[2] == 'gene' and f[0] in sizes and \
+                    ('gene_type "protein_coding"' in f[8] or 'gene_biotype "protein_coding"' in f[8]):
+                n += 1
+    return n
+
+
+def downstream_checks(out, sf, sizes, test_data):
+    samples = [r['sample'] for r in sf]
+    frag_path = {s: f'{out}/fragments/{s}.fragments.bed.gz' for s in samples}
+    n_frag = {r['sample']: int(r['fragments']) for r in sf}
+
+    # ---- featureCounts ----
+    print()
+    fc_dir = f'{out}/featurecounts'
+    sets = [x for x in ('genes', 'promoters', 'ccre') if os.path.exists(f'{fc_dir}/{x}.counts.tsv')]
+    check('genes' in sets and 'promoters' in sets, 'featureCounts: gene and promoter matrices exist', ', '.join(sets))
+    fr = {s: frag_arrays(frag_path[s]) for s in samples}
+    for name in sets:
+        saf = read_tsv(f'{fc_dir}/annotation/{name}.saf')
+        feats = [(r['Chr'], int(r['Start']) - 1, int(r['End'])) for r in saf]
+        mat = read_tsv(f'{fc_dir}/{name}.counts.tsv')
+        check([r['Geneid'] for r in mat] == [r['GeneID'] for r in saf],
+              f'featureCounts {name}: matrix rows = SAF rows', f'{len(mat):,} features')
+        summary = {}
+        with open(f'{fc_dir}/{name}.counts.tsv.summary') as fh:
+            head = next(fh).rstrip('\n').split('\t')
+            for line in fh:
+                f = line.rstrip('\n').split('\t')
+                summary[f[0]] = dict(zip(head[1:], map(int, f[1:])))
+        merged = merge(feats)
+        for s in samples:
+            want = per_feature_counts(fr[s], feats)
+            got = np.array([int(r[s]) for r in mat])
+            check(np.array_equal(got, want), f'featureCounts {name} {s}: every count = fragments overlapping the feature',
+                  f'{int((got != want).sum())} of {len(got):,} differ; column sum {got.sum():,}')
+            total = sum(v[s] for v in summary.values())
+            hit, _ = n_overlapping(frag_path[s], merged)
+            assigned = summary['Assigned'][s]
+            check(total == n_frag[s], f'featureCounts {name} {s}: summary total = fragments', f'{total:,}')
+            check(assigned == hit and assigned > 0,
+                  f'featureCounts {name} {s}: Assigned = fragments overlapping >= 1 feature (> 0)',
+                  f'{assigned:,} vs {hit:,}, rate {assigned / max(1, total):.3f}')
+
+    ann = read_kv(f'{fc_dir}/annotation/annotation_summary.tsv')
+    n_pc = protein_coding_genes(f'{out}/genome/genes.gtf.gz', sizes)
+    prom = read_tsv(f'{fc_dir}/annotation/promoters.saf')
+    genes = {r['GeneID']: r for r in read_tsv(f'{fc_dir}/annotation/genes.saf')}
+    check(len(prom) == n_pc, 'promoter SAF rows = protein-coding genes (TSSs) in the GTF', f'{len(prom):,} vs {n_pc:,}')
+    w = int(ann['promoter_window'])
+    bad = 0
+    for p in prom:
+        g = genes[p['GeneID']]
+        tss = int(g['End']) if g['Strand'] == '-' else int(g['Start'])
+        if (int(p['Start']), int(p['End'])) != (max(1, tss - w), min(sizes[p['Chr']], tss + w)):
+            bad += 1
+    check(bad == 0, f'every promoter = its gene TSS +/- {w} bp (clipped to the chromosome)', f'{bad} wrong')
+
+    # ---- SEACR peaks + peaks_frip.tsv ----
+    print()
+    pf = read_tsv(f'{out}/peaks_frip.tsv')
+    controls = {r['control'] for r in pf if r['control'] != 'NA'}
+    check(not (controls & {r['sample'] for r in pf}), 'controls are not peak-called (no peaks_frip row)')
+    if test_data:
+        check(len(pf) == 2 and all(r['seacr_mode'] == 'control' for r in pf),
+              'test data: both targets peak-called in control mode', ', '.join(f'{r["sample"]}={r["seacr_mode"]}' for r in pf))
+    for r in pf:
+        s = r['sample']
+        has_ctrl = r['control'] != 'NA'
+        check(r['seacr_mode'] == ('control' if has_ctrl else 'top0.01'), f'{s}: SEACR mode matches the control column',
+              r['seacr_mode'])
+        peak_sets = [('', f'{out}/seacr/{s}.stringent.bed')]
+        if has_ctrl:
+            peak_sets.append(('top01_', f'{out}/seacr/top0.01/{s}.stringent.bed'))
+        for prefix, path in peak_sets:
+            peaks = read_bed(path)
+            widths = sorted(e - b for _, b, e in peaks)
+            label = f'{s} {"top0.01" if prefix else "primary"} peaks'
+            check(int(r[prefix + 'peaks']) == len(peaks), f'{label}: peak count = SEACR BED lines', f'{len(peaks):,}')
+            if widths:
+                check(float(r[prefix + 'median_width']) == float(np.median(widths)) and
+                      abs(float(r[prefix + 'mean_width']) - np.mean(widths)) < 0.051 and
+                      int(r[prefix + 'bp_in_peaks']) == sum(widths),
+                      f'{label}: median / mean width and bp in peaks', f'{np.median(widths):g} / {np.mean(widths):.1f} / {sum(widths):,}')
+            merged = merge(peaks)
+            hit, total = n_overlapping(frag_path[s], merged)
+            frip = hit / total
+            check(abs(float(r[prefix + 'frip']) - frip) < 1e-6, f'{label}: FRiP recomputed from the fragment BED', f'{frip:.4f}')
+            if has_ctrl:
+                chit, ctot = n_overlapping(frag_path[r['control']], merged)
+                cfrip = chit / ctot
+                check(abs(float(r[prefix + 'control_frip']) - cfrip) < 1e-6,
+                      f'{label}: control_frip recomputed ({r["control"]} fragments)', f'{cfrip:.4f}')
+                if not prefix and test_data:
+                    # Not a known answer here: the test IgG is ~88% chrM pairs (pairs were chosen
+                    # on chr22 + chrM), so a target peak on chrM holds most IgG fragments.
+                    print(f'INFO  {s}: control_frip {cfrip:.4f}, FRiP {frip:.4f} (test data: not checked)')
+                elif not prefix:
+                    check(cfrip < frip, f'{s}: control_frip < FRiP', f'{cfrip:.4f} < {frip:.4f}')
+
+    # ---- deepTools ----
+    print()
+    dt = f'{out}/deeptools'
+    for r in pf:
+        s = r['sample']
+        if int(r['peaks']) > 0:
+            ok = all(os.path.getsize(f'{dt}/peaks/{s}.peaks_{k}.pdf') > 0 for k in ('heatmap', 'profile'))
+            check(ok, f'{s}: peak heatmap and profile written')
+    kinds = ['coverage_norm'] + (['readcount_scaled'] if os.path.isdir(f'{out}/bigwig/readcount_scaled') else [])
+    for k in kinds:
+        check(os.path.getsize(f'{dt}/tss/tss_profile_{k}.pdf') > 0, f'TSS profile written: tss_profile_{k}.pdf')
+    check(os.path.getsize(f'{dt}/tss/tss_heatmap_coverage_norm.pdf') > 0, 'TSS heatmap written')
+    with gzip.open(f'{dt}/tss/tss_matrix_coverage_norm.gz', 'rt') as fh:
+        import json
+        head = json.loads(next(fh)[1:])
+        rows = sum(1 for _ in fh)
+    n_tss = sum(1 for _ in open(f'{fc_dir}/annotation/tss_genes.bed'))
+    check(rows == n_tss and head['sample_labels'] == samples,
+          'TSS matrix: one row per protein-coding gene, every sample a column', f'{rows:,} rows vs {n_tss:,} genes')
+
+    # ---- Correlation ----
+    print()
+    with gzip.open(f'{out}/correlation/correlation_bins.tsv.gz', 'rt') as fh:
+        labels = [x.strip("'") for x in next(fh).rstrip('\n').split('\t')[3:]]
+        vals = np.array([[float(x) for x in line.rstrip('\n').split('\t')[3:]] for line in fh])
+    vals = np.nan_to_num(vals)                   # no bigWig value = no fragments = 0
+    vals = vals[(vals != 0).any(axis=1)]         # --skipZeros: drop bins that are 0 in every sample
+    want = np.corrcoef(np.log1p(vals).T)
+    got = {}
+    with open(f'{out}/correlation/correlation_matrix.tsv') as fh:
+        lines = [l.rstrip('\n').split('\t') for l in fh if not l.startswith('#')]
+    cols = [x.strip("'") for x in lines[0][1:]]
+    for f in lines[1:]:
+        for c, v in zip(cols, f[1:]):
+            got[(f[0].strip("'"), c)] = float(v)
+    err = max(abs(got[(a, b)] - want[i, j]) for i, a in enumerate(labels) for j, b in enumerate(labels))
+    check(sorted(labels) == sorted(samples) and err < 1e-4, 'correlation matrix = Pearson of log1p(5 kb bin values)',
+          f'{len(vals):,} bins, max error {err:.1e}')
+    for i, a in enumerate(labels):
+        best = max((want[i, j], b) for j, b in enumerate(labels) if j != i)
+        print(f'INFO  {a}: most correlated with {best[1]} (r = {best[0]:.3f})')
+
+    # ---- MultiQC ----
+    print()
+    mq = f'{out}/multiqc'
+    check(os.path.getsize(f'{mq}/multiqc_report.html') > 0, 'MultiQC report written')
+    html = open(f'{mq}/multiqc_report.html', encoding='utf-8', errors='replace').read().lower()  # anchors vary in case
+    want_ids = ['fastqc', 'cutadapt', 'bowtie2', 'bowtie2_ecoli', 'samtools', 'picard', 'featurecounts_genes',
+                'featurecounts_promoters', 'alignment_stats', 'duplication', 'scale_factors', 'peaks_frip',
+                'fragment_sizes', 'correlation_heatmap'] + (['featurecounts_ccre'] if 'ccre' in sets else [])
+    missing = [x for x in want_ids if f'id="{x}"' not in html and f"id='{x}'" not in html]
+    check(not missing, 'MultiQC report holds every expected section', 'missing: ' + ', '.join(missing) if missing else
+          f'{len(want_ids)} sections')
 
 
 def main():
@@ -290,6 +535,8 @@ def main():
                     if i >= 0 and ends[c][i] > b:
                         overlap += 1
             check(overlap == 0, f'{s}: fragments overlapping the blacklist = 0', str(overlap))
+
+    downstream_checks(out, sf, sizes, args.test_data)
 
     print(f'\n{failures} check(s) failed' if failures else '\nall checks passed')
     sys.exit(1 if failures else 0)
