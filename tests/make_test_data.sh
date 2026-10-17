@@ -19,7 +19,7 @@
 #          (so the carry-over QC is non-zero). Each sample is then downsampled
 #          to a different depth (ratio 4 : 2 : 1) so read-count scaling is tested.
 #          Written to $OUT/ (committed, except the FASTA and Bowtie2 index):
-#            fastq/<sample>_R{1,2}.fastq.gz
+#            fastq/<sample>_R{1,2}.fastq.gz   (IgG_rep1: fastq/lane{1,2}/, two lanes)
 #            samplesheet.csv
 #            genome/chr22_chrM.chrom.sizes
 #            genome/chr22_chrM.gencode.v50.gtf.gz
@@ -201,11 +201,27 @@ for entry in "${SAMPLES[@]}"; do
     i=$((i + 1))
 done
 
+# IgG_rep1 is split into two lanes with the SAME file names in different folders
+# (first LANE1_PAIRS pairs in lane1/, the rest in lane2/). This tests lane
+# concatenation and that same-named lane files do not collide. The two lanes
+# joined are byte-identical to the unsplit FASTQ.
+LANE1_PAIRS=3000
+mkdir -p "$OUT/fastq/lane1" "$OUT/fastq/lane2"
+for r in 1 2; do
+    f="$OUT/fastq/IgG_rep1_R$r.fastq.gz"
+    zcat "$f" | head -n $(( LANE1_PAIRS * 4 )) | gzip -n -9 -c > "$OUT/fastq/lane1/IgG_rep1_R$r.fastq.gz"
+    zcat "$f" | tail -n +$(( LANE1_PAIRS * 4 + 1 )) | gzip -n -9 -c > "$OUT/fastq/lane2/IgG_rep1_R$r.fastq.gz"
+    [[ "$(zcat "$f" | md5sum)" == "$(cat "$OUT"/fastq/lane{1,2}/IgG_rep1_R$r.fastq.gz | zcat | md5sum)" ]]
+done
+IGG_PAIRS=$(count_pairs "$OUT/fastq/IgG_rep1_R1.fastq.gz")
+rm "$OUT"/fastq/IgG_rep1_R{1,2}.fastq.gz
+
 {
     echo "sample,fastq_1,fastq_2,control,is_control,pool"
     echo "H3K27me3_rep1,fastq/H3K27me3_rep1_R1.fastq.gz,fastq/H3K27me3_rep1_R2.fastq.gz,IgG_rep1,false,pool1"
     echo "H3K4me3_rep1,fastq/H3K4me3_rep1_R1.fastq.gz,fastq/H3K4me3_rep1_R2.fastq.gz,IgG_rep1,false,pool1"
-    echo "IgG_rep1,fastq/IgG_rep1_R1.fastq.gz,fastq/IgG_rep1_R2.fastq.gz,,true,pool1"
+    echo "IgG_rep1,fastq/lane1/IgG_rep1_R1.fastq.gz,fastq/lane1/IgG_rep1_R2.fastq.gz,,true,pool1"
+    echo "IgG_rep1,fastq/lane2/IgG_rep1_R1.fastq.gz,fastq/lane2/IgG_rep1_R2.fastq.gz,,true,pool1"
 } > "$OUT/samplesheet.csv"
 
 # ---------------------------------------------------------------------------
@@ -220,7 +236,12 @@ done
         printf '%s.smoke_pairs\t%s\n' "$sample" "$(count_pairs "$WORK/smoke/${sample}_R1.fastq.gz")"
         printf '%s.chr22_chrM_pairs_in_smoke\t%s\n' "$sample" "$(wc -l < "$WORK/align/$sample.hg38.names")"
         printf '%s.ecoli_pairs_in_smoke\t%s\n'      "$sample" "$(wc -l < "$WORK/align/$sample.ecoli.names")"
-        printf '%s.ci_pairs\t%s\n'    "$sample" "$(count_pairs "$OUT/fastq/${sample}_R1.fastq.gz")"
+        if [[ $sample == IgG_rep1 ]]; then
+            printf '%s.ci_pairs\t%s\n' "$sample" "$IGG_PAIRS"
+            printf '%s.ci_lanes\t%s\n' "$sample" "2 (lane1: $LANE1_PAIRS pairs, lane2: $(( IGG_PAIRS - LANE1_PAIRS )) pairs)"
+        else
+            printf '%s.ci_pairs\t%s\n' "$sample" "$(count_pairs "$OUT/fastq/${sample}_R1.fastq.gz")"
+        fi
     done
     printf 'seed\t%s\n' "$SEED"
     printf 'gtf\t%s\n' "$GTF_URL"

@@ -1,4 +1,5 @@
 sample,fastq_1,fastq_2,control,is_control,pool
 H3K27me3_rep1,fastq/H3K27me3_rep1_R1.fastq.gz,fastq/H3K27me3_rep1_R2.fastq.gz,IgG_rep1,false,pool1
 H3K4me3_rep1,fastq/H3K4me3_rep1_R1.fastq.gz,fastq/H3K4me3_rep1_R2.fastq.gz,IgG_rep1,false,pool1
-IgG_rep1,fastq/IgG_rep1_R1.fastq.gz,fastq/IgG_rep1_R2.fastq.gz,,true,pool1
+IgG_rep1,fastq/lane1/IgG_rep1_R1.fastq.gz,fastq/lane1/IgG_rep1_R2.fastq.gz,,true,pool1
+IgG_rep1,fastq/lane2/IgG_rep1_R1.fastq.gz,fastq/lane2/IgG_rep1_R2.fastq.gz,,true,pool1

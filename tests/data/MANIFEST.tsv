@@ -17,6 +17,7 @@ IgG_rep1.smoke_pairs	1000000
 IgG_rep1.chr22_chrM_pairs_in_smoke	106855
 IgG_rep1.ecoli_pairs_in_smoke	35579
 IgG_rep1.ci_pairs	5753
+IgG_rep1.ci_lanes	2 (lane1: 3000 pairs, lane2: 2753 pairs)
 seed	100
 gtf	https://ftp.ebi.ac.uk/pub/databases/gencode/Gencode_human/release_50/gencode.v50.annotation.gtf.gz
 ccre	https://www.encodeproject.org/files/ENCFF420VPZ/@@download/ENCFF420VPZ.bed.gz

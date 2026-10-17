@@ -3,12 +3,14 @@
  */
 
 // Step 1a. Join the lanes of one sample into one R1 and one R2 file, and count the read pairs.
+// Each lane file is staged in its own numbered folder (in_R1_1/, in_R1_2/, ...), so lanes
+// with the same file name from different folders do not collide.
 process CAT_FASTQ {
     tag "${meta.id}"
     container params.container__samtools
 
     input:
-    tuple val(meta), path(r1, stageAs: 'in_R1/*'), path(r2, stageAs: 'in_R2/*')
+    tuple val(meta), path(r1, stageAs: 'in_R1_*/*'), path(r2, stageAs: 'in_R2_*/*')
 
     output:
     tuple val(meta), path("${meta.id}_R1.fastq.gz"), path("${meta.id}_R2.fastq.gz"), emit: reads

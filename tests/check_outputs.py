@@ -19,6 +19,7 @@ Checks:
     each bigWig with values shuffled among equal-length intervals
   * s_cov and s_rc recomputed from the fragment BED files, independent of the pipeline
   * alignment_stats.tsv: every column filled, % chrM > 0 (test data),
+    total pairs = MANIFEST.tsv (test data; IgG_rep1 has two lanes),
     filtered <= aligned <= after trimming <= total
   * duplicates kept: fragments (+ blacklist-removed) = pairs examined by MarkDuplicates
     (--test-data only: every test pair is on chr22/chrM with a fragment < 1000 bp)
@@ -160,6 +161,7 @@ def main():
     sf = read_tsv(f'{out}/scale_factors.tsv')
     stats = {r['sample']: r for r in read_tsv(f'{out}/alignment_stats.tsv')}
     dup = {r['sample']: r for r in read_tsv(f'{out}/duplication.tsv')}
+    manifest = read_kv(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'data', 'MANIFEST.tsv'))
     print(f'genome_size = {genome_size:,} bp, blacklist_filter = {gs["blacklist_filter"]}\n')
 
     # ---- Independent recomputation of C_i, s_cov, s_rc from the fragment BEDs ----
@@ -235,6 +237,11 @@ def main():
               f'{filt} <= {al} <= {trim} <= {tot}')
         if args.test_data:
             check(float(r['pct_chrM']) > 0, f'{s}: % chrM > 0', r['pct_chrM'])
+            # IgG_rep1 has two lanes with the same file names in different folders:
+            # this holds only if both lanes were joined.
+            want = manifest.get(f'{s}.ci_pairs')
+            check(want is not None and tot == int(want), f'{s}: total pairs = tests/data/MANIFEST.tsv',
+                  f'{tot} vs {want} ({manifest.get(f"{s}.ci_lanes", "1 lane")})')
 
     # ---- Duplicates kept ----
     print()
