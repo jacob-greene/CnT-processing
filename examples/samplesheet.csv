@@ -1,0 +1,4 @@
+sample,fastq_1,fastq_2,control,is_control,pool
+H3K27me3_rep1,../test_data_work/smoke/H3K27me3_rep1_R1.fastq.gz,../test_data_work/smoke/H3K27me3_rep1_R2.fastq.gz,IgG_rep1,false,pool1
+H3K4me3_rep1,../test_data_work/smoke/H3K4me3_rep1_R1.fastq.gz,../test_data_work/smoke/H3K4me3_rep1_R2.fastq.gz,IgG_rep1,false,pool1
+IgG_rep1,../test_data_work/smoke/IgG_rep1_R1.fastq.gz,../test_data_work/smoke/IgG_rep1_R2.fastq.gz,,true,pool1

@@ -1,10 +1,10 @@
 {
     "$schema": "https://raw.githubusercontent.com/FredHutch/bash-workbench/main/docs/schema.json",
     "name": "CnT-processing",
-    "description": "CUT&Tag processing: FASTQ to normalized bigWigs, counts, SEACR peaks and QC",
+    "description": "CUT&Tag processing: paired-end FASTQ to normalized bigWigs, featureCounts, SEACR peaks, QC and a MultiQC report",
     "args": {
         "samplesheet": {
-            "help": "Sample sheet CSV with columns sample,fastq_1,fastq_2,control,is_control,pool",
+            "help": "Sample sheet CSV with the columns sample,fastq_1,fastq_2,control,is_control,pool (see the README)",
             "wb_type": "file",
             "required": true
         },
@@ -14,49 +14,49 @@
             "wb_choices": ["hg38", "hg19", "mm10", "dm6"],
             "required": true
         },
-        "bowtie2_index": {
-            "help": "Bowtie2 index prefix (leave empty to use the shared Fred Hutch index for the genome)",
-            "wb_type": "string"
-        },
-        "min_mapq": {
-            "help": "Minimum mapping quality of kept read pairs",
-            "wb_type": "integer",
-            "default": 10
-        },
-        "keep_chrM": {
-            "help": "Keep the mitochondrial contig in the fragments and the genome size",
-            "wb_type": "bool",
-            "default": true
-        },
-        "promoter_window": {
-            "help": "Promoter window: protein-coding TSS +/- this many bp",
-            "wb_type": "integer",
-            "default": 5000
-        },
-        "plot_window": {
-            "help": "Window (+/- bp) around TSSs and peak summits in the deepTools plots",
-            "wb_type": "integer",
-            "default": 5000
-        },
-        "optical_pixel_distance": {
-            "help": "Picard optical duplicate pixel distance: 2500 for patterned flow cells, 100 for unpatterned",
-            "wb_type": "integer",
-            "default": 2500
-        },
         "readcount_scaled_bw": {
-            "help": "Also make read-count scaled bigWigs (assumes equal cell input and equal-volume pooling)",
-            "wb_type": "bool",
-            "default": false
-        },
-        "dedup_controls": {
-            "help": "Use deduplicated IgG control fragments for SEACR",
+            "help": "Also write read-count scaled bigWigs (only meaningful if every library in a pool started from the same number of cells and was pooled by equal volume)",
             "wb_type": "bool",
             "default": false
         },
         "blacklist_filter": {
-            "help": "Remove fragments that overlap the ENCODE blacklist v2",
+            "help": "Remove fragments that overlap the ENCODE blacklist before every downstream step",
             "wb_type": "bool",
             "default": false
+        },
+        "dedup_controls": {
+            "help": "Use deduplicated IgG control fragments for SEACR (suggested by the Henikoff lab tutorial, because IgG duplication is high)",
+            "wb_type": "bool",
+            "default": false
+        },
+        "min_mapq": {
+            "help": "Minimum MAPQ of a kept read",
+            "wb_type": "integer",
+            "default": 10
+        },
+        "optical_pixel_distance": {
+            "help": "Picard OPTICAL_DUPLICATE_PIXEL_DISTANCE: 2500 for patterned flow cells (NovaSeq, HiSeq X/4000), 100 for unpatterned flow cells",
+            "wb_type": "integer",
+            "default": 2500
+        },
+        "promoter_window": {
+            "help": "Promoters = protein-coding TSS +/- this many bp (featureCounts)",
+            "wb_type": "integer",
+            "default": 5000
+        },
+        "plot_window": {
+            "help": "+/- bp around TSSs and peak summits in the deepTools plots",
+            "wb_type": "integer",
+            "default": 5000
+        },
+        "keep_chrM": {
+            "help": "Keep the mitochondrial chromosome in the fragments, bigWigs and genome_size",
+            "wb_type": "bool",
+            "default": true
+        },
+        "bowtie2_index": {
+            "help": "Optional. Bowtie2 index prefix. Leave empty to use the shared Fred Hutch index for the genome",
+            "wb_type": "string"
         }
     }
 }

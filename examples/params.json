@@ -1,0 +1,12 @@
+{
+    "samplesheet": "examples/samplesheet.csv",
+    "genome": "hg38",
+    "outdir": "results",
+    "readcount_scaled_bw": true,
+    "blacklist_filter": false,
+    "dedup_controls": false,
+    "min_mapq": 10,
+    "promoter_window": 5000,
+    "plot_window": 5000,
+    "optical_pixel_distance": 2500
+}
