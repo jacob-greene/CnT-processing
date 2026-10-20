@@ -4,7 +4,7 @@
     "description": "CUT&Tag processing: paired-end FASTQ to normalized bigWigs, featureCounts, SEACR peaks, QC and a MultiQC report",
     "args": {
         "samplesheet": {
-            "help": "Sample sheet CSV with the columns sample,fastq_1,fastq_2,control,is_control,pool (see the README)",
+            "help": "Sample sheet CSV with the columns sample,fastq_1,fastq_2,control,is_control,pool (see docs/inputs.md)",
             "wb_type": "file",
             "required": true
         },

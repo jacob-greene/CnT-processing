@@ -2,7 +2,7 @@
  * Steps 9-10: fragment BED files, optional blacklist filtering, scale factors,
  * raw-count bedGraphs and normalized bigWigs.
  *
- * Normalization (see README, "Normalization"):
+ * Normalization (see docs/steps.md, "Coverage and bigWigs"):
  *
  *   C_i         = total per-base coverage of sample i = sum of its fragment lengths
  *   genome_size = sum of canonical chromosome sizes (minus blacklisted bp when

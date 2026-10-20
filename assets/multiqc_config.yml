@@ -3,7 +3,7 @@
 # each get their own section.
 report_comment: >
   CUT&Tag processing report. Pipeline tables: alignment stats, duplication,
-  scale factors, peaks and FRiP. See the pipeline README for every column.
+  scale factors, peaks and FRiP. See docs/outputs.md of the pipeline for every column.
 
 extra_fn_clean_exts:
   - '.bowtie2.log'
