@@ -32,6 +32,76 @@ a fork of nf-core/cutandrun. It does no spike-in normalization.
 
 ## Workflow steps
 
+```mermaid
+flowchart TD
+    fq[/"FASTQ lanes + sample sheet"/]
+    ref[/"Genome: GENOME_SIZE, PREPARE_GTF, BOWTIE2_BUILD"/]
+
+    fq --> CAT_FASTQ["CAT_FASTQ (1)"]
+    CAT_FASTQ --> FASTQC["FASTQC (1)"]
+    CAT_FASTQ --> TRIM_GALORE["TRIM_GALORE (2)"]
+    TRIM_GALORE --> BOWTIE2_ALIGN["BOWTIE2_ALIGN (3)"]
+    TRIM_GALORE --> BOWTIE2_ECOLI["BOWTIE2_ECOLI (4)<br/>QC only"]
+    ref --> BOWTIE2_ALIGN
+    ref --> BOWTIE2_ECOLI
+    BOWTIE2_ALIGN --> FILTER_BAM["FILTER_BAM (5)"]
+    FILTER_BAM --> MARKDUPLICATES["MARKDUPLICATES (6)<br/>duplicates kept"]
+    MARKDUPLICATES --> NAMESORT
+    NAMESORT --> FRAGMENTS["FRAGMENTS (9)<br/>fragment BED + raw bedGraph<br/>blacklist filter if blacklist_filter"]
+    NAMESORT -. "dedup_controls" .-> FRAGMENTS_DEDUP["FRAGMENTS_DEDUP<br/>deduplicated IgG"]
+
+    FRAGMENTS --> SCALE_FACTORS["SCALE_FACTORS (10)"]
+    SCALE_FACTORS --> BIGWIG_COV["BIGWIG_COV (10)<br/>coverage-normalized"]
+    SCALE_FACTORS -. "readcount_scaled_bw" .-> BIGWIG_RC["BIGWIG_RC (10)<br/>read-count scaled"]
+
+    ref --> ANNOTATIONS["ANNOTATIONS<br/>genes, promoters, cCREs, TSSs"]
+    FRAGMENTS --> FEATURECOUNTS["FEATURECOUNTS (11)"]
+    ANNOTATIONS --> FEATURECOUNTS
+
+    FRAGMENTS --> SEACR{"SEACR (12)<br/>targets only"}
+    FRAGMENTS_DEDUP -. "control bedGraph" .-> SEACR
+    SEACR -- "control set" --> ctl["IgG-controlled<br/>norm stringent, + top 1% set"]
+    SEACR -- "no control" --> noctl["top 1%<br/>0.01 non stringent"]
+    ctl --> PEAK_STATS["PEAK_STATS (13)<br/>FRiP, control FRiP"]
+    noctl --> PEAK_STATS
+    ctl --> DEEPTOOLS_PEAKS["DEEPTOOLS_PEAKS (14)"]
+    noctl --> DEEPTOOLS_PEAKS
+    BIGWIG_COV --> DEEPTOOLS_PEAKS
+    BIGWIG_COV --> DEEPTOOLS_TSS["DEEPTOOLS_TSS (14)"]
+    BIGWIG_RC -.-> DEEPTOOLS_TSS
+    ANNOTATIONS --> DEEPTOOLS_TSS
+    BIGWIG_COV --> CORRELATION["CORRELATION (15)<br/>5 kb bins"]
+
+    subgraph qc["QC"]
+        QC_TABLES["QC_TABLES (7)<br/>alignment stats, duplication"]
+        FRAGMENT_SIZE_PLOT["FRAGMENT_SIZE_PLOT (8)"]
+        MULTIQC["MULTIQC (16)"]
+        QC_TABLES --> MULTIQC
+        FRAGMENT_SIZE_PLOT --> MULTIQC
+    end
+    BOWTIE2_ECOLI --> QC_TABLES
+    FILTER_BAM --> FRAGMENT_SIZE_PLOT
+    FASTQC --> MULTIQC
+
+    BIGWIG_COV --> o1[("bigWigs")]
+    BIGWIG_RC -.-> o1
+    FEATURECOUNTS --> o2[("featureCounts matrices")]
+    ctl --> o3[("SEACR peaks")]
+    noctl --> o3
+    PEAK_STATS --> o4[("peaks_frip.tsv")]
+    DEEPTOOLS_PEAKS --> o5[("deepTools plots")]
+    DEEPTOOLS_TSS --> o5
+    CORRELATION --> o5
+    MULTIQC --> o6[("MultiQC report")]
+```
+
+Solid arrows always run. Dotted arrows run only when the named parameter is
+true. Numbers in brackets are the step numbers in the table below.
+`QC_TABLES` also reads the logs and stats of steps 1-9. `MULTIQC` also reads
+the trimming, alignment, duplication, featureCounts, scale-factor, FRiP and
+correlation outputs. `SOFTWARE_VERSIONS` collects the tool versions of every
+step into `software_versions.yml`.
+
 | Step | What happens | Tool |
 |---|---|---|
 | 1 | Join the lanes of each sample, then run FastQC | cat, FastQC |
